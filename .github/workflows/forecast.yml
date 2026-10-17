@@ -1,0 +1,46 @@
+name: DooFah ECMWF Forecast Pipeline
+
+on:
+  schedule:
+    # รอบ 00Z (ออกครบประมาณ 14:30 น. เวลาไทย -> รัน 15:00 น. = 08:00 UTC)
+    - cron: '0 8 * * *'
+    # รอบ 12Z (ออกครบประมาณ 02:30 น. เวลาไทย -> รัน 03:00 น. = 20:00 UTC)
+    - cron: '0 20 * * *'
+  workflow_dispatch: # มีปุ่มให้กดสั่งรันเองได้ทุกเมื่อบนหน้าเว็บ GitHub
+
+jobs:
+  process-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120 # กันค้างสูงสุด 2 ชั่วโมง
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Install System Dependencies (ecCodes for cfgrib)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev libeccodes-tools
+
+      - name: 3. Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: 4. Install Python Packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 5. Run ECMWF Data Pipeline
+        run: |
+          python update_data.py
+
+      - name: 6. Deploy Data to Cloudflare Pages
+        if: success()
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: pages deploy public --project-name=doofah-data --branch=main

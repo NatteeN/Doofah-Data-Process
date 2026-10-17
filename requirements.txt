@@ -1,0 +1,12 @@
+ecmwf-opendata
+xarray
+numpy
+matplotlib
+geojsoncontour
+cfgrib
+eccodes
+scipy
+netcdf4
+boto3
+opencv-python-headless
+requests

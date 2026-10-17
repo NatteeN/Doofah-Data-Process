@@ -1,0 +1,20 @@
+# Virtual Environment & Python cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# ไฟล์ข้อมูลชั่วคราวและผลลัพธ์จากสคริปต์
+temp_dist/
+public/
+public_nowcast/
+*.grib
+*.grib2
+*.idx
+*.pkl
+*.txt
+!requirements.txt
+
+# ระบบปฏิบัติการ macOS & IDE
+.DS_Store
+.vscode/
