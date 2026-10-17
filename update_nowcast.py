@@ -1162,7 +1162,10 @@ def upload_to_cloudflare_kv(metadata_dict, frames_payload):
 
     if not (cf_account and cf_token and cf_ns):
         if IS_PRODUCTION_CI:
-            raise RuntimeError("รันในโหมด Production CI แต่ไม่พบ CF_ACCOUNT_ID / CF_API_TOKEN / CF_KV_NAMESPACE_ID")
+            raise RuntimeError(
+                "Missing GitHub Actions secrets: "
+                + ", ".join(missing)
+            )
         print("ℹ️ โหมดทดสอบในเครื่อง (Local): บันทึกไฟล์ลงโฟลเดอร์เรียบร้อยโดยไม่อัปโหลดขึ้น Cloudflare KV")
         return False
 
