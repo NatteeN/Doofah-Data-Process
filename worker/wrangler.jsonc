@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4/config-schema.json",
+  "name": "doofah-nowcast-api",
+  "main": "index.js",
+  "compatibility_date": "2026-10-18",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "NOWCAST_KV",
+      "id": "b3e7498e7d6146f8a1decf4e40102d61"
+    }
+  ]
+}
