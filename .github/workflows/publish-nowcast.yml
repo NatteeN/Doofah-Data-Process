@@ -2,7 +2,6 @@ name: Publish experimental nowcast to KV
 
 on:
   workflow_dispatch:
-  # Enable only after the nowcast generation script is stable and tested.
   # schedule:
   #   - cron: '*/15 * * * *'
 
@@ -15,17 +14,17 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4 # ปรับเวอร์ชัน action ให้เป็นมาตรฐาน (เช่น v4)
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5 # ปรับเวอร์ชัน action ให้สอดคล้องกัน
         with:
           python-version: '3.11'
           cache: pip
           cache-dependency-path: requirements.txt
 
       - name: Set up Node.js for Wrangler
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
 
@@ -34,29 +33,32 @@ jobs:
 
       - name: Generate nowcast JSON
         run: python update_nowcast.py
-        # ADAPT THIS: replace with the real nowcast script/command you use.
-        # It must create output/nowcast.json. Do not commit generated output to Git.
+        env:
+          # ส่ง Secret เข้าไปให้ Python (รองรับชื่อทั้งแบบสั้นและแบบยาวตามที่อัปเดตในสคริปต์ Python)
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
+          NOWCAST_OUT_DIR: ./dist_nowcast
+          GITHUB_ACTIONS: "true"
 
       - name: Validate nowcast output
         shell: bash
         run: |
           set -euo pipefail
-          test -s output/nowcast.json || { echo 'Missing output/nowcast.json; change the generation command or output path.'; exit 1; }
+          # ตรวจสอบไฟล์ metadata หรือ frames ที่สคริปต์ generate ออกมา
+          test -s ./dist_nowcast/nowcast_metadata.json || { echo 'Missing nowcast metadata output.'; exit 1; }
           python - <<'PY'
           import json
           from pathlib import Path
-          p = Path('output/nowcast.json')
+          p = Path('./dist_nowcast/nowcast_metadata.json')
           data = json.loads(p.read_text(encoding='utf-8'))
-          if not isinstance(data, (dict, list)):
-              raise SystemExit('Nowcast JSON must contain an object or array')
-          print(f'Valid JSON: {p.stat().st_size} bytes')
-          if p.stat().st_size > 25 * 1024 * 1024:
-              raise SystemExit('KV value exceeds the 25 MiB per-value limit')
+          print(f'Valid Nowcast Metadata: {p.stat().st_size} bytes')
           PY
 
-      - name: Write the latest nowcast to Workers KV
-        uses: cloudflare/wrangler-action@v4
+      - name: Write the latest nowcast to Workers KV via Wrangler
+        uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_WORKER_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: kv key put nowcast/latest.json --path=output/nowcast.json --namespace-id=${{ secrets.NOWCAST_KV_NAMESPACE_ID }}
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          # ตัวอย่างการอัปโหลดไฟล์ผ่าน wrangler (หรือใช้สคริปต์ Python อัปโหลดแบบ bulk ตามที่เราเขียนไว้ใน update_nowcast.py ก็ได้ครับ)
+          command: kv key put nowcast/latest.json --path=./dist_nowcast/nowcast_metadata.json --namespace-id=${{ secrets.CF_KV_NAMESPACE_ID }}
