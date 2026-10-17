@@ -58,7 +58,6 @@ jobs:
       - name: Write the latest nowcast to Workers KV via Wrangler
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          # ตัวอย่างการอัปโหลดไฟล์ผ่าน wrangler (หรือใช้สคริปต์ Python อัปโหลดแบบ bulk ตามที่เราเขียนไว้ใน update_nowcast.py ก็ได้ครับ)
-          command: kv key put nowcast/latest.json --path=./dist_nowcast/nowcast_metadata.json --namespace-id=${{ secrets.CF_KV_NAMESPACE_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_WORKER_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: kv key put nowcast/latest.json --path=./dist_nowcast/nowcast_metadata.json --namespace-id=${{ secrets.NOWCAST_KV_NAMESPACE_ID }}
