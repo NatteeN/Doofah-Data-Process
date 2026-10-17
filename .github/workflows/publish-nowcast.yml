@@ -33,7 +33,7 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
       - name: Generate nowcast JSON
-        run: python nowcast/generate_nowcast.py
+        run: python update_nowcast.py
         # ADAPT THIS: replace with the real nowcast script/command you use.
         # It must create output/nowcast.json. Do not commit generated output to Git.
 
