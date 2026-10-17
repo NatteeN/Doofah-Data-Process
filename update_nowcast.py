@@ -1134,9 +1134,18 @@ geojson_bundle = {}
 grid_bundle = {}
 
 def upload_to_cloudflare_kv(metadata_dict, frames_payload):
-    cf_account = os.getenv("CF_ACCOUNT_ID")
-    cf_token = os.getenv("CF_API_TOKEN")
-    cf_ns = os.getenv("CF_KV_NAMESPACE_ID")
+    cf_account = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+    cf_token = os.getenv("CLOUDFLARE_WORKER_API_TOKEN")
+    cf_ns = os.getenv("NOWCAST_KV_NAMESPACE_ID")
+
+    missing = [
+        name for name, value in [
+            ("CLOUDFLARE_ACCOUNT_ID", cf_account),
+            ("CLOUDFLARE_WORKER_API_TOKEN", cf_token),
+            ("NOWCAST_KV_NAMESPACE_ID", cf_ns),
+        ]
+        if not value
+    ]
 
     geojson_bundle["nowcast_metadata.json"] = metadata_dict
     grid_bundle["nowcast_frames.json"] = frames_payload
