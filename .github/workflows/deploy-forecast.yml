@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
   # After a successful manual test, you may enable a schedule.
   # GitHub cron uses UTC. Example 02:30, 08:30, 14:30, 20:30 UTC = 09:30, 15:30, 21:30, 03:30 Thailand time.
-  # schedule:
-  #   - cron: '30 2,8,14,20 * * *'
+  schedule:
+    - cron: '30 2,8,14,20 * * *'
 
 permissions:
   contents: read
