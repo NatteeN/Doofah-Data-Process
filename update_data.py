@@ -21,12 +21,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 #### Production Environment
 OUT_DIR = 'temp_dist'
-# FINAL_DIR = 'public'
-FINAL_DIR = '../Doofah_fe/public'
-os.makedirs(FINAL_DIR, exist_ok=True)  # ใช้ตัวแปรเดียวกันกับ OUTPUT_DIR เพื่อให้สอดคล้องกับการตั้งค่าใน Dockerfile
+FINAL_DIR = 'public'
+# FINAL_DIR = '../Doofah_fe/public'
+# os.makedirs(FINAL_DIR, exist_ok=True)  # ใช้ตัวแปรเดียวกันกับ OUTPUT_DIR เพื่อให้สอดคล้องกับการตั้งค่าใน Dockerfile
 
-# os.makedirs(OUT_DIR, exist_ok=True)
-# os.makedirs(FINAL_DIR, exist_ok=True)
+os.makedirs(OUT_DIR, exist_ok=True)
+os.makedirs(FINAL_DIR, exist_ok=True)
 
 STATE_FILE = f"{OUT_DIR}/_pipeline_state.pkl"
 RUN_MARKER_FILE = f"{OUT_DIR}/_current_run.txt"
