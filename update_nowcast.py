@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from scipy.ndimage import gaussian_filter, map_coordinates
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 try:
@@ -583,10 +583,23 @@ def load_ecmwf_environment(target_utc_dt):
     ).rstrip("/")
 
     def fetch_json(url, missing_ok=False):
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 DooFah-Nowcast/1.0",
+                "Accept": "application/json,*/*",
+            },
+        )
+
         try:
-            with urlopen(url, timeout=30) as response:
+            with urlopen(request, timeout=30) as response:
                 return json.loads(response.read().decode("utf-8"))
+
         except HTTPError as exc:
+            body = exc.read(500).decode("utf-8", errors="replace")
+            print(f"❌ ECMWF HTTP {exc.code}: {url}")
+            print(f"   Response: {body[:300]}")
+
             if missing_ok and exc.code == 404:
                 return None
             raise
