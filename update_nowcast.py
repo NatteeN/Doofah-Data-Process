@@ -27,19 +27,6 @@ except ImportError:
 # --- ตั้งค่าโฟลเดอร์และโหมดการทำงาน (Local vs Production) ---
 NOWCAST_OUT_DIR = os.environ.get("NOWCAST_OUT_DIR", "../Doofah_fe/public/nowcast")
 ECMWF_PUBLIC_DIR = os.environ.get("ECMWF_PUBLIC_DIR", "../Doofah_fe/public")
-
-print("========== PATH DEBUG ==========")
-print("Working directory:", os.getcwd())
-print("NOWCAST_OUT_DIR:", os.path.abspath(NOWCAST_OUT_DIR))
-print("NOWCAST output directory exists:", os.path.isdir(NOWCAST_OUT_DIR))
-print("ECMWF_PUBLIC_DIR:", os.path.abspath(ECMWF_PUBLIC_DIR))
-print("ECMWF directory exists:", os.path.isdir(ECMWF_PUBLIC_DIR))
-print(
-    "ECMWF metadata exists:",
-    os.path.isfile(os.path.join(ECMWF_PUBLIC_DIR, "metadata.json"))
-)
-print("================================")
-
 STATE_MARKER_FILE = f"{NOWCAST_OUT_DIR}/_last_obs_time.txt"
 STATUS_FILE = f"{NOWCAST_OUT_DIR}/status.json"
 SHADOW_ALERTS_FILE = f"{NOWCAST_OUT_DIR}/shadow_alerts.json"
@@ -581,6 +568,15 @@ def load_ecmwf_environment(target_utc_dt):
         "ECMWF_BASE_URL",
         "https://doofah-forecast-data.pages.dev"
     ).rstrip("/")
+
+    print("========== PATH DEBUG ==========")
+    print(f"Working directory: {os.getcwd()}")
+    print(f"NOWCAST_OUT_DIR: {os.path.abspath(NOWCAST_OUT_DIR)}")
+    print(f"NOWCAST output directory exists: {os.path.isdir(NOWCAST_OUT_DIR)}")
+    print(f"ECMWF source URL: {ecmwf_base_url}")
+    print(f"ECMWF metadata URL: {ecmwf_base_url}/metadata.json")
+    print("ECMWF mode: remote HTTP")
+    print("================================")
 
     def fetch_json(url, missing_ok=False):
         request = Request(
