@@ -1133,11 +1133,13 @@ def generate_shadow_mode_alerts(
 geojson_bundle = {}
 grid_bundle = {}
 
+
 def upload_to_cloudflare_kv(metadata_dict, frames_payload):
     cf_account = os.getenv("CLOUDFLARE_ACCOUNT_ID")
     cf_token = os.getenv("CLOUDFLARE_WORKER_API_TOKEN")
     cf_ns = os.getenv("NOWCAST_KV_NAMESPACE_ID")
 
+    # 1. ตรวจสอบ Environment Variables
     missing = [
         name for name, value in [
             ("CLOUDFLARE_ACCOUNT_ID", cf_account),
@@ -1147,43 +1149,124 @@ def upload_to_cloudflare_kv(metadata_dict, frames_payload):
         if not value
     ]
 
-    geojson_bundle["nowcast_metadata.json"] = metadata_dict
-    grid_bundle["nowcast_frames.json"] = frames_payload
+    if missing:
+        raise RuntimeError(
+            "ขาด GitHub Actions Secrets: " + ", ".join(missing)
+        )
 
-    geo_str = json.dumps(geojson_bundle, separators=(",", ":"))
-    grid_str = json.dumps(grid_bundle, separators=(",", ":"))
+    # 2. กำหนด Cloudflare API
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/"
+        f"{cf_account}/storage/kv/namespaces/{cf_ns}/bulk"
+    )
 
-    geo_bytes = len(geo_str.encode("utf-8"))
-    grid_bytes = len(grid_str.encode("utf-8"))
-    print(f"📦 ขนาด Bundle: geojson={geo_bytes / (1024*1024):.2f} MiB, grid+frames={grid_bytes / (1024*1024):.2f} MiB")
-
-    if geo_bytes > KV_MAX_SAFE_BYTES or grid_bytes > KV_MAX_SAFE_BYTES:
-        raise RuntimeError("ขนาดข้อมูลเกินขีดจำกัดปลอดภัยของ Cloudflare KV (24 MiB)")
-
-    if not (cf_account and cf_token and cf_ns):
-        if IS_PRODUCTION_CI:
-            raise RuntimeError(
-                "Missing GitHub Actions secrets: "
-                + ", ".join(missing)
-            )
-        print("ℹ️ โหมดทดสอบในเครื่อง (Local): บันทึกไฟล์ลงโฟลเดอร์เรียบร้อยโดยไม่อัปโหลดขึ้น Cloudflare KV")
-        return False
-
-    url = f"https://api.cloudflare.com/client/v4/accounts/{cf_account}/storage/kv/namespaces/{cf_ns}/bulk"
     headers = {
         "Authorization": f"Bearer {cf_token}",
         "Content-Type": "application/json",
     }
+
+    # 3. เตรียม Metadata และ GeoJSON
+    geojson_bundle["nowcast_metadata.json"] = metadata_dict
+
+    kv_items = {}
+
+    for filename, data in geojson_bundle.items():
+        kv_items[f"nowcast/{filename}"] = json.dumps(
+            data, separators=(",", ":"), ensure_ascii=False
+        )
+
+    # อัปโหลด Grid files แยก Key ด้วย
+    for filename, data in grid_bundle.items():
+        # ไม่อัปโหลด bundle เฟรมแบบเก่าทั้งก้อน
+        if filename == "nowcast_frames.json":
+            continue
+
+        kv_items[f"nowcast/{filename}"] = json.dumps(
+            data, separators=(",", ":"), ensure_ascii=False
+        )
+
+    # 4. แยกแต่ละเฟรมเป็น KV Key
+    compact_frames = frames_payload.get("frames", {})
+    print("🔎 Frame keys:", list(compact_frames.keys()))
+
+    if not compact_frames:
+        raise RuntimeError(
+            "ไม่พบ frames ใน frames_payload จึงยกเลิกการอัปโหลด"
+        )
+
+    for lead_min, frame_data in compact_frames.items():
+        filename = f"nowcast_frame_{lead_min}.json"
+        kv_items[f"nowcast/{filename}"] = json.dumps(
+            frame_data, separators=(",", ":"), ensure_ascii=False
+        )
+
+    # 5. เก็บ Metadata สำหรับ /nowcast/latest
+    metadata_str = json.dumps(
+        metadata_dict, separators=(",", ":"), ensure_ascii=False
+    )
+    kv_items["nowcast/latest.json"] = metadata_str
+
+    # 6. ตรวจขนาดข้อมูลแต่ละ KV Value
+    for key, value in kv_items.items():
+        size = len(value.encode("utf-8"))
+
+        if size > KV_MAX_SAFE_BYTES:
+            raise RuntimeError(
+                f"KV value ใหญ่เกินกำหนด: {key} "
+                f"({size / (1024 * 1024):.2f} MiB)"
+            )
+
+    print(f"📦 จำนวน KV Keys: {len(kv_items)}")
+    print(
+        "📦 ขนาดข้อมูลรวม: "
+        f"{sum(len(v.encode('utf-8')) for v in kv_items.values()) / (1024 * 1024):.2f} MiB"
+    )
+
     payload = [
-        {"key": "nowcast_geojson_bundle", "value": geo_str},
-        {"key": "nowcast_grid_bundle", "value": grid_str},
+        {"key": key, "value": value}
+        for key, value in kv_items.items()
     ]
-    resp = requests.put(url, headers=headers, json=payload, timeout=60)
-    if resp.status_code == 200 and resp.json().get("success"):
-        print("✅ อัปโหลด Nowcast Bundles เข้า Cloudflare Workers KV สำเร็จ!")
+
+    request_body = json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+    if len(request_body) >= 100 * 1024 * 1024:
+        raise RuntimeError(
+            "Bulk upload request มีขนาดถึงหรือเกิน 100 MB"
+        )
+
+    # 7. อัปโหลดเข้า Cloudflare KV
+    resp = requests.put(
+        url,
+        headers=headers,
+        data=request_body,
+        timeout=60,
+    )
+
+    try:
+        result = resp.json()
+    except ValueError:
+        raise RuntimeError(
+            f"Cloudflare ตอบกลับข้อมูลที่ไม่ใช่ JSON: "
+            f"{resp.status_code} {resp.text[:1000]}"
+        )
+
+    if resp.ok and result.get("success"):
+        errors = result.get("errors", [])
+
+        if errors:
+            raise RuntimeError(
+                f"Cloudflare Bulk API รายงานข้อผิดพลาด: {errors}"
+            )
+
+        print("✅ อัปโหลด Nowcast แยก Key เข้า KV สำเร็จ!")
         return True
-    else:
-        raise RuntimeError(f"อัปโหลดเข้า Cloudflare KV ล้มเหลว: {resp.status_code} {resp.text}")
+
+    raise RuntimeError(
+        f"อัปโหลดเข้า Cloudflare KV ล้มเหลว: "
+        f"{resp.status_code} {resp.text[:2000]}"
+    )
 
 
 # --- 7. เริ่มรัน Pipeline หลักของ DooFah Nowcast ---
