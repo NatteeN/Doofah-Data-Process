@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from scipy.ndimage import gaussian_filter, map_coordinates
+from urllib.request import urlopen
+from urllib.error import HTTPError
 
 try:
     import cv2
@@ -25,6 +27,19 @@ except ImportError:
 # --- ตั้งค่าโฟลเดอร์และโหมดการทำงาน (Local vs Production) ---
 NOWCAST_OUT_DIR = os.environ.get("NOWCAST_OUT_DIR", "../Doofah_fe/public/nowcast")
 ECMWF_PUBLIC_DIR = os.environ.get("ECMWF_PUBLIC_DIR", "../Doofah_fe/public")
+
+print("========== PATH DEBUG ==========")
+print("Working directory:", os.getcwd())
+print("NOWCAST_OUT_DIR:", os.path.abspath(NOWCAST_OUT_DIR))
+print("NOWCAST output directory exists:", os.path.isdir(NOWCAST_OUT_DIR))
+print("ECMWF_PUBLIC_DIR:", os.path.abspath(ECMWF_PUBLIC_DIR))
+print("ECMWF directory exists:", os.path.isdir(ECMWF_PUBLIC_DIR))
+print(
+    "ECMWF metadata exists:",
+    os.path.isfile(os.path.join(ECMWF_PUBLIC_DIR, "metadata.json"))
+)
+print("================================")
+
 STATE_MARKER_FILE = f"{NOWCAST_OUT_DIR}/_last_obs_time.txt"
 STATUS_FILE = f"{NOWCAST_OUT_DIR}/status.json"
 SHADOW_ALERTS_FILE = f"{NOWCAST_OUT_DIR}/shadow_alerts.json"
@@ -545,6 +560,7 @@ def fetch_thailand_grids_with_parallax(
 
 
 # --- 3. ตรวจสอบเวลาและขนาดกริดของ ECMWF ก่อนนำมาใช้ (P0.4) ---
+
 def load_ecmwf_environment(target_utc_dt):
     env_factor = np.ones(EXPECTED_SHAPE, dtype=np.float32)
     sfc_temp = None
@@ -560,103 +576,223 @@ def load_ecmwf_environment(target_utc_dt):
         "ecmwf_time_diff_hours": None,
     }
 
-    meta_path = os.path.join(ECMWF_PUBLIC_DIR, "metadata.json")
-    if not os.path.exists(meta_path):
-        return env_factor, sfc_temp, env_info
+    # ECMWF data is hosted on Cloudflare Pages
+    ecmwf_base_url = os.environ.get(
+        "ECMWF_BASE_URL",
+        "https://doofah-forecast-data.pages.dev"
+    ).rstrip("/")
+
+    def fetch_json(url, missing_ok=False):
+        try:
+            with urlopen(url, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if missing_ok and exc.code == 404:
+                return None
+            raise
 
     def read_grid(filename):
-        path = os.path.join(ECMWF_PUBLIC_DIR, filename)
-        if not os.path.exists(path):
+        url = f"{ecmwf_base_url}/{filename}"
+        raw = fetch_json(url, missing_ok=True)
+
+        if raw is None:
+            print(f"⚠️ ไม่พบ ECMWF grid: {url}")
             return None, None
-        with open(path, "r", encoding="utf-8") as gf:
-            raw = json.load(gf)
+
         units = raw.get("units") if isinstance(raw, dict) else None
+
         if isinstance(raw, dict):
             arr_list = raw.get("values")
             if arr_list is None:
                 arr_list = raw.get("data")
         else:
             arr_list = raw
+
         if arr_list is None:
             return None, units
+
         arr = np.asarray(arr_list, dtype=np.float32)
+
         if arr.shape != EXPECTED_SHAPE:
+            print(
+                f"⚠️ รูปร่างกริดไม่ตรง {filename}: "
+                f"ได้ {arr.shape}, ต้องการ {EXPECTED_SHAPE}"
+            )
             return None, units
+
         arr[~np.isfinite(arr)] = np.nan
         return arr, units
 
     try:
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
+        # Fetch metadata from Cloudflare Pages
+        meta_url = f"{ecmwf_base_url}/metadata.json"
+        meta = fetch_json(meta_url)
+
         forecasts = meta.get("forecasts", {})
         best_step = None
         min_diff_hours = float("inf")
+
         for step_str, valid_str in forecasts.items():
             try:
                 if isinstance(valid_str, dict):
-                    valid_str = valid_str.get("valid_time") or valid_str.get("valid")
-                valid_dt = datetime.strptime(str(valid_str).strip(), "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
+                    valid_str = (
+                        valid_str.get("valid_time")
+                        or valid_str.get("valid")
+                    )
+
+                valid_dt = datetime.strptime(
+                    str(valid_str).strip(),
+                    "%Y-%m-%d %H"
+                ).replace(tzinfo=timezone.utc)
+
             except (TypeError, ValueError):
                 continue
-            diff_h = abs((target_utc_dt - valid_dt).total_seconds()) / 3600.0
+
+            diff_h = abs(
+                (target_utc_dt - valid_dt).total_seconds()
+            ) / 3600.0
+
             if diff_h < min_diff_hours:
                 min_diff_hours = diff_h
                 best_step = str(step_str)
 
+        # Only accept a forecast time within 3.5 hours
         if best_step is None or min_diff_hours > 3.5:
+            print(
+                "⚠️ ไม่พบ ECMWF step ที่ใกล้เวลาเป้าหมายพอ "
+                f"(ส่วนต่าง {min_diff_hours:.2f} ชั่วโมง)"
+            )
             return env_factor, sfc_temp, env_info
 
         env_info["ecmwf_run_id"] = meta.get("data_as_of")
+
         try:
             env_info["ecmwf_matched_step"] = int(best_step)
         except ValueError:
             env_info["ecmwf_matched_step"] = best_step
-        env_info["ecmwf_time_diff_hours"] = round(min_diff_hours, 2)
 
-        t2m, t2m_units = read_grid(f"2t_{best_step}_grid.json")
+        env_info["ecmwf_time_diff_hours"] = round(
+            min_diff_hours, 2
+        )
+
+        print(
+            f"🌦️ ECMWF matched step={best_step}, "
+            f"time difference={min_diff_hours:.2f}h"
+        )
+
+        # 2-metre temperature
+        t2m, t2m_units = read_grid(
+            f"2t_{best_step}_grid.json"
+        )
+
         if t2m is not None:
             coverage = float(np.mean(np.isfinite(t2m)))
             env_info["ecmwf_2t_coverage"] = round(coverage, 4)
             finite_vals = t2m[np.isfinite(t2m)]
+
             if finite_vals.size:
                 med = float(np.nanmedian(finite_vals))
-                unit_str = str(t2m_units or "").strip().lower().replace("°", "")
+                unit_str = (
+                    str(t2m_units or "")
+                    .strip()
+                    .lower()
+                    .replace("°", "")
+                )
+
                 if unit_str in {"k", "kelvin", "degk"}:
                     t2m_c = t2m - 273.15
                     normalized_unit = "K_to_C"
-                elif unit_str in {"c", "degc", "celsius", "degree_celsius", "degrees_celsius"}:
+
+                elif unit_str in {
+                    "c", "degc", "celsius",
+                    "degree_celsius", "degrees_celsius"
+                }:
                     t2m_c = t2m.copy()
                     normalized_unit = "C"
+
                 elif 150.0 <= med <= 350.0:
-                    # Backward-compatible detection for legacy files without units.
                     t2m_c = t2m - 273.15
                     normalized_unit = "K_to_C_inferred_from_range"
+
                 elif -90.0 <= med <= 70.0:
                     t2m_c = t2m.copy()
                     normalized_unit = "C_inferred_from_range"
+
                 else:
                     t2m_c = None
                     normalized_unit = "unrecognized"
+
                 if t2m_c is not None and coverage >= 0.85:
-                    physically_plausible = np.isfinite(t2m_c) & (t2m_c >= -90.0) & (t2m_c <= 65.0)
+                    physically_plausible = (
+                        np.isfinite(t2m_c)
+                        & (t2m_c >= -90.0)
+                        & (t2m_c <= 65.0)
+                    )
+
                     if float(np.mean(physically_plausible)) >= 0.80:
-                        sfc_temp = np.where(physically_plausible, np.clip(t2m_c, -50.0, 60.0), np.nan).astype(np.float32)
+                        sfc_temp = np.where(
+                            physically_plausible,
+                            np.clip(t2m_c, -50.0, 60.0),
+                            np.nan
+                        ).astype(np.float32)
+
                         env_info["ecmwf_2t_available"] = True
+
                 env_info["ecmwf_2t_units"] = normalized_unit
 
-        mucape, _ = read_grid(f"mucape_{best_step}_grid.json")
-        tcwv, _ = read_grid(f"tcwv_{best_step}_grid.json")
-        mucape_cov = float(np.mean(np.isfinite(mucape))) if mucape is not None else 0.0
-        tcwv_cov = float(np.mean(np.isfinite(tcwv))) if tcwv is not None else 0.0
-        env_info["ecmwf_mucape_coverage"] = round(mucape_cov, 4)
-        env_info["ecmwf_tcwv_coverage"] = round(tcwv_cov, 4)
+        # MUCAPE and total column water vapour
+        mucape, _ = read_grid(
+            f"mucape_{best_step}_grid.json"
+        )
+        tcwv, _ = read_grid(
+            f"tcwv_{best_step}_grid.json"
+        )
 
-        if mucape is not None and tcwv is not None and mucape_cov >= 0.85 and tcwv_cov >= 0.85:
-            cape_safe = np.where(np.isfinite(mucape), np.clip(mucape, 0.0, 10000.0), 500.0)
-            tcwv_safe = np.where(np.isfinite(tcwv), np.clip(tcwv, 0.0, 100.0), 50.0)
-            cape_norm = np.clip(cape_safe / 2000.0, 0.5, 1.3)
-            tcwv_norm = np.clip(tcwv_safe / 55.0, 0.7, 1.2)
-            env_factor = np.clip(0.5 * cape_norm + 0.5 * tcwv_norm, 0.6, 1.35).astype(np.float32)
+        mucape_cov = (
+            float(np.mean(np.isfinite(mucape)))
+            if mucape is not None else 0.0
+        )
+        tcwv_cov = (
+            float(np.mean(np.isfinite(tcwv)))
+            if tcwv is not None else 0.0
+        )
+
+        env_info["ecmwf_mucape_coverage"] = round(
+            mucape_cov, 4
+        )
+        env_info["ecmwf_tcwv_coverage"] = round(
+            tcwv_cov, 4
+        )
+
+        if (
+            mucape is not None
+            and tcwv is not None
+            and mucape_cov >= 0.85
+            and tcwv_cov >= 0.85
+        ):
+            cape_safe = np.where(
+                np.isfinite(mucape),
+                np.clip(mucape, 0.0, 10000.0),
+                500.0
+            )
+            tcwv_safe = np.where(
+                np.isfinite(tcwv),
+                np.clip(tcwv, 0.0, 100.0),
+                50.0
+            )
+
+            cape_norm = np.clip(
+                cape_safe / 2000.0, 0.5, 1.3
+            )
+            tcwv_norm = np.clip(
+                tcwv_safe / 55.0, 0.7, 1.2
+            )
+
+            env_factor = np.clip(
+                0.5 * cape_norm + 0.5 * tcwv_norm,
+                0.6, 1.35
+            ).astype(np.float32)
+
             env_info["ecmwf_env_available"] = True
 
     except Exception as exc:
