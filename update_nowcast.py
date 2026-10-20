@@ -1351,6 +1351,10 @@ def upload_to_cloudflare_kv(metadata_dict, frames_payload):
     )
     kv_items["nowcast/latest.json"] = metadata_str
 
+    print("📋 KV keys to upload:")
+    for key in sorted(kv_items):
+        print(f"  - {key}")
+
     # 6. ตรวจขนาดข้อมูลแต่ละ KV Value
     for key, value in kv_items.items():
         size = len(value.encode("utf-8"))
